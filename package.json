@@ -1,0 +1,15 @@
+{
+  "name": "auto-demo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Automated product demo recording pipeline",
+  "scripts": {
+    "lint": "node --check scripts/run_demo_template.js",
+    "typecheck": "node --check scripts/run_demo_template.js",
+    "test": "npm run lint"
+  },
+  "dependencies": {
+    "ghost-cursor": "^1.0.0",
+    "playwright": "^1.52.0"
+  }
+}
