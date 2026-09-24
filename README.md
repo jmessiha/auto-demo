@@ -41,6 +41,31 @@ The pipeline is designed to run locally against a target web application. It doe
 
 The PyTorch backend requires the exact transcript of the reference recording. Apple Silicon uses the MLX backend when available; other platforms use PyTorch with CUDA, MPS, or CPU fallback.
 
+## Claude Code setup
+
+Install the repository as a personal Claude Code skill:
+
+```bash
+mkdir -p ~/.claude/skills
+git clone https://github.com/joshshiman/auto-demo.git ~/.claude/skills/record-demo
+bash ~/.claude/skills/record-demo/scripts/setup_env.sh
+(cd ~/.claude/skills/record-demo && npx playwright install chromium)
+```
+
+The root `SKILL.md` is the Claude Code entry point. Start Claude Code in the target application repository and invoke it with:
+
+```text
+/record-demo
+```
+
+The skill uses `${CLAUDE_SKILL_DIR}` for bundled scripts, so the same layout works for project-level and plugin installs. To update an existing installation:
+
+```bash
+(cd ~/.claude/skills/record-demo && git pull)
+```
+
+Keep `assets/*.wav` local. The reference voice is personal data and is intentionally ignored by Git.
+
 ## Quick start
 
 Clone the repository and install the local dependencies:
