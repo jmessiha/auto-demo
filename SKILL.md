@@ -59,7 +59,8 @@ mkdir -p ./output
 cp "${CLAUDE_SKILL_DIR}/scripts/run_demo_template.js" ./output/run_demo.js
 ```
 
-6. Start or open the target application and set `DEMO_URL` plus any authentication variables required by the workflow.
+Use `waitForScene(page, scene)` and `runCue(page, timings, cueId, {scene})` instead of bare `page.waitForTimeout` calls. A cue must start only after its destination heading, region, selector, or URL is visible. The recorder writes each cue's measured interval to `output/sync_manifest.json`. Keep cue order aligned with visual scene order, and pass the post-click destination as `waitForAfter` when using `DEMO_ACTIONS`.
+6. Start or open the target application and set `DEMO_URL` plus any authentication variables required by the workflow. If authentication is interactive, complete it in an unrecorded context before starting the recorded context. The recorder uses a 2000x1125 page viewport and matching recording frame by default, then the muxer scales the final video to 1920x1080; override the page viewport with `DEMO_VIEWPORT_WIDTH` and `DEMO_VIEWPORT_HEIGHT` when a target requires a different layout.
 7. Install the target repository's Node dependencies if the generated recorder is run from that repository. The skill's `setup_env.sh` installs its recorder dependencies in `${CLAUDE_SKILL_DIR}/node_modules`; when the generated script is copied into another repository, use that repository's dependencies or set `NODE_PATH="${CLAUDE_SKILL_DIR}/node_modules"`.
 8. Run the recorder:
 
@@ -67,13 +68,14 @@ cp "${CLAUDE_SKILL_DIR}/scripts/run_demo_template.js" ./output/run_demo.js
 node ./output/run_demo.js
 ```
 
-9. Mux the audio and recording:
+9. Inspect `output/sync_manifest.json` and confirm each event has `cue_id`, `file`, `start_sec`, and `end_sec`. The events must be ordered and non-overlapping.
+10. Mux the audio and recording. The muxer uses the sync manifest to trim pre-roll before the first cue, insert silence for browser transitions between cues, and align each narration clip with its recorded visual scene:
 
 ```bash
 bash "${CLAUDE_SKILL_DIR}/scripts/mux.sh" ./output/audio ./output/recordings ./output/final_demo.mp4
 ```
 
-10. Verify that the final MP4 exists, is non-empty, contains H.264 video and AAC audio, and has approximately the narration duration:
+11. Verify that the final MP4 exists, is non-empty, contains H.264 video and AAC audio, and has approximately the narration duration:
 
 ```bash
 test -s ./output/final_demo.mp4
@@ -99,12 +101,15 @@ ffprobe -v error -show_entries format=duration:stream=codec_name,width,height \
 - Qwen model download or memory failure: confirm free disk space, remove unused local model caches, and retry the 0.6B model.
 - Playwright module missing: run the skill bootstrap and set `NODE_PATH="${CLAUDE_SKILL_DIR}/node_modules"` when running from a target repository.
 - Missing target selectors: inspect the running target with browser tools and replace the template workflow before recording.
-- Final duration mismatch: compare the master narration and final MP4 with `ffprobe`; the audio track is intentionally the shorter source and muxing uses `-shortest`.
+- Final duration mismatch: compare the master narration and final MP4 with `ffprobe`; the muxer caps the output at the narration duration with `-t`, and stops early when the recording is the shorter input.
 
 ## Execution Notes
 
 - Audio durations are generated before recording and read from `output/timing_manifest.json`.
+- `runCue` waits for the scene's visible content before starting narration and records the actual cue interval in `output/sync_manifest.json`.
+- Browser navigation and rendering gaps are preserved as silence between cue clips during muxing; this prevents the next voice line from starting over a loading screen.
+- The Playwright template uses a 2000x1125 page viewport and matching recording frame by default, preventing wide application layouts from clipping at the right edge; the muxer scales the final output to 1920x1080. Set `DEMO_VIEWPORT_WIDTH` and `DEMO_VIEWPORT_HEIGHT` to override the page viewport.
 - The Playwright template uses smooth target scrolling and a click ripple; it does not transform or zoom the page body, which keeps long pages and nested scroll containers stable.
-- `mux.sh` uses the pointer file when present and otherwise selects the newest WebM recording.
+- `mux.sh` uses the pointer file when present and otherwise selects the newest WebM recording, then trims any pre-roll before the first cue.
 - Generated files belong under `output/` and should not be committed.
 - After changing this skill, restart Claude Code so the updated skill is loaded.

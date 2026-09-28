@@ -6,6 +6,12 @@ const path = require('path');
 const rootDir = path.resolve(__dirname, '..');
 const outputDir = path.join(rootDir, 'output');
 const recordingsDir = path.join(outputDir, 'recordings');
+const syncManifestPath = path.join(outputDir, 'sync_manifest.json');
+const viewport = {
+  width: Number(process.env.DEMO_VIEWPORT_WIDTH || 2000),
+  height: Number(process.env.DEMO_VIEWPORT_HEIGHT || 1125),
+};
+const recordingSize = {...viewport};
 const manifestCandidates = [
   path.join(outputDir, 'timing_manifest.json'),
   path.join(outputDir, 'audio', 'timing_manifest.json'),
@@ -22,6 +28,50 @@ function readTimings() {
 function waitDuration(timings, cueId, paddingSec = 0.5) {
   const item = timings[cueId];
   return item ? (item.duration_sec + paddingSec) * 1000 : 2000;
+}
+
+let syncClockMs = Date.now();
+const syncEvents = [];
+
+function syncNow() {
+  return (Date.now() - syncClockMs) / 1000;
+}
+
+function writeSyncManifest() {
+  fs.writeFileSync(syncManifestPath, JSON.stringify({
+    version: 1,
+    video_start_epoch_ms: syncClockMs,
+    events: syncEvents,
+  }, null, 2) + '\n', 'utf8');
+}
+
+async function waitForScene(page, scene) {
+  if (!scene) {
+    return;
+  }
+  if (scene.urlPattern) {
+    await page.waitForURL(new RegExp(scene.urlPattern), {timeout: scene.timeoutMs || 30000});
+  }
+  let target;
+  if (scene.selector) {
+    target = page.locator(scene.selector).first();
+  } else if (scene.text) {
+    target = page.getByText(scene.text, {exact: scene.exactText !== false}).first();
+  } else if (scene.role) {
+    target = page.getByRole(scene.role, {name: scene.name, exact: scene.exactName !== false}).first();
+  }
+  if (target) {
+    await target.waitFor({state: 'visible', timeout: scene.timeoutMs || 30000});
+    await page.waitForTimeout(scene.stableMs || 350);
+  }
+}
+
+async function runCue(page, timings, cueId, options = {}) {
+  await waitForScene(page, options.scene);
+  const event = {cue_id: cueId, file: timings[cueId]?.file || null, start_sec: syncNow(), scene: options.scene || null};
+  syncEvents.push(event);
+  await page.waitForTimeout(waitDuration(timings, cueId, options.settleSec ?? 0.35));
+  event.end_sec = syncNow();
 }
 
 function readDemoActions() {
@@ -152,15 +202,16 @@ async function runProductWorkflow(page, timings, cursor) {
   await page.goto(demoUrl, { waitUntil: 'domcontentloaded' });
   const actions = readDemoActions();
   if (actions.length === 0) {
-    await page.waitForTimeout(waitDuration(timings, 'cue_01'));
+    await runCue(page, timings, 'cue_01', {scene: process.env.DEMO_INITIAL_SCENE ? JSON.parse(process.env.DEMO_INITIAL_SCENE) : null});
     return;
   }
   for (const action of actions) {
     const target = page.locator(action.selector).first();
+    await waitForScene(page, action.waitForBefore || {selector: action.selector});
     await target.waitFor({ state: 'visible' });
     await cursor.click(target);
     if (action.cue) {
-      await page.waitForTimeout(waitDuration(timings, action.cue));
+      await runCue(page, timings, action.cue, {scene: action.waitForAfter || action.waitForBefore || {selector: action.selector}});
     }
   }
 }
@@ -170,15 +221,17 @@ async function runDemo() {
   fs.mkdirSync(recordingsDir, { recursive: true });
   const browser = await chromium.launch({
     headless: process.env.DEMO_HEADLESS === '1',
+    args: ['--force-device-scale-factor=1'],
   });
   const context = await browser.newContext({
-    viewport: { width: 1920, height: 1080 },
+    viewport,
     recordVideo: {
       dir: recordingsDir,
-      size: { width: 1920, height: 1080 },
+      size: recordingSize,
     },
   });
   const page = await context.newPage();
+  syncClockMs = Date.now();
   const video = page.video();
   const cursor = createPlaywrightCursor(page);
   await addDemoEnhancements(page);
@@ -189,6 +242,7 @@ async function runDemo() {
   } catch (error) {
     workflowError = error;
   } finally {
+    writeSyncManifest();
     await context.close();
     await browser.close();
   }
