@@ -85,7 +85,7 @@ ffprobe -v error -show_entries format=duration:stream=codec_name,width,height \
 
 ## Requirements
 
-- Python 3.11 or newer with `venv` support.
+- Python 3.11 or 3.12 with `venv` support. Do not use 3.13+; the PyTorch wheels are not published for it.
 - FFmpeg available in `$PATH`.
 - Node.js and npm available in `$PATH`.
 - Approximately 3 GB of free disk space for the default Qwen 0.6B model and its isolated environment.

@@ -1,166 +1,41 @@
 # auto-demo
 
-Turn a product workflow into a narrated demo video. Point it at a web app, give it a list of sentences and a 10-second recording of your own voice, and it produces a synchronized 1080p MP4 with a synthetic cursor and narration in your voice.
+Ask your coding agent for a product demo video. It writes the narration, drives a real browser through your app, and hands you a narrated 1080p MP4 with a synthetic cursor and a cloned voice.
 
-Everything runs locally. No API keys, no hosted recording service.
+The agent does the work. You describe the app.
 
-## What you need
+## Use it
 
-Install these once, if you don't have them:
+Install the skill once (see [Install](#install)), then open Claude Code in your app's repo and ask for a demo in plain language:
+
+```text
+make a 60 second narrated demo of the reporting dashboard
+```
+
+```text
+record a walkthrough of the signup flow, three or four sentences
+```
+
+That's the whole interface. The agent inspects the running app, drafts the narration, finds the selectors, syncs the voice to each screen, and delivers `output/final_demo.mp4`.
+
+**The one thing only you can provide** is a 5–12 second sample of your own voice, saved once as `assets/reference_voice.wav`. The agent cannot record that for you. Everything after that is the agent's problem.
+
+## Install
+
+Install the toolchain once, if you don't have it:
 
 ```bash
 brew install python@3.12 node ffmpeg
 ```
 
-On macOS, put the 3.12 ahead of any other Python on your `PATH` before you go any further — see the note in [Install](#install).
-
-| Tool | Version | Notes |
-| --- | --- | --- |
-| Python | 3.11 or 3.12 | Use 3.12. Do not use 3.13+ — the PyTorch wheels aren't published for it yet. |
-| Node.js | 20 or newer | `node -v` should print `v20` or higher. |
-| FFmpeg | any recent | Provides `ffmpeg` and `ffprobe`. |
-
-Budget about **3 GB of free disk space** — the first run downloads the Qwen3-TTS 0.6B model and keeps it cached.
-
-On an Apple Silicon Mac the pipeline uses MLX and is fast. On Windows and Linux it uses PyTorch, which falls back to CPU if you have no NVIDIA GPU, and is slow there.
-
-## Install
+On macOS, get 3.12 ahead of any other Python on your `PATH` before going further:
 
 ```bash
-git clone https://github.com/joshshiman/auto-demo.git
-cd auto-demo
-bash scripts/setup_env.sh
-npx playwright install chromium
-```
-
-`setup_env.sh` creates a virtual environment (`.venv-mlx` on Apple Silicon, `.venv` elsewhere), installs the Python packages, and installs the Node packages. It takes a couple of minutes.
-
-**macOS only**, if `python3 --version` isn't already 3.11 or 3.12:
-
-```bash
-brew install python@3.12
 echo 'export PATH="/opt/homebrew/opt/python@3.12/bin:$PATH"' >> ~/.zshrc
 source ~/.zshrc
 ```
 
-`setup_env.sh` calls whatever `python3` is on your `PATH`, so do this **before** running it.
-
-Confirm it worked:
-
-```bash
-python3 --version              # must be 3.11.x or 3.12.x
-./.venv/bin/python --version   # or ./.venv-mlx/bin/python --version
-```
-
-## Make a demo
-
-Six steps. Steps 1–4 are the same for every demo, so once you have a voice sample you can skip ahead to the parts you change.
-
-### 1. Write your narration
-
-Create `output/cues.json`. One object per sentence, in the order the sentences should be spoken:
-
-```json
-[
-  { "id": "cue_01", "text": "Welcome to the reporting dashboard." },
-  { "id": "cue_02", "text": "Here is the workflow you can automate." }
-]
-```
-
-Keep the sentences short. Long ones produce long, dead-looking clips.
-
-### 2. Record your voice sample
-
-Record 5–12 seconds of yourself speaking normally — no music, no background noise — and save it as `assets/reference_voice.wav`.
-
-If you recorded something else first, convert and trim it:
-
-```bash
-ffmpeg -i ~/Desktop/my_voice.m4a -t 8 -ar 16000 -ac 1 assets/reference_voice.wav
-```
-
-This file is deliberately ignored by Git. It is your voice, and it should never end up in a public repo.
-
-On Apple Silicon you're done. On Windows and Linux, also write down the **exact words** you said in that clip — the PyTorch backend needs them verbatim.
-
-### 3. Generate the narration
-
-```bash
-if [[ "$(uname -s)" == "Darwin" && "$(uname -m)" == "arm64" ]]; then
-  PY=./.venv-mlx/bin/python
-else
-  PY=./.venv/bin/python
-fi
-
-$PY scripts/voice_clone.py \
-  --cues output/cues.json \
-  --ref-audio assets/reference_voice.wav \
-  --ref-transcript "the exact words you spoke in the sample"
-```
-
-`--ref-transcript` is only read by the PyTorch backend, so you can leave it off on a Mac. The first run downloads the model and takes a few minutes; later runs take seconds.
-
-You should now have `output/audio/cue_01.wav`, `cue_02.wav`, and a timing manifest.
-
-### 4. Describe the workflow
-
-The recorder is a template — you have to tell it what to click.
-
-```bash
-cp scripts/run_demo_template.js output/run_demo.js
-```
-
-Open `output/run_demo.js` and replace the body of `runProductWorkflow` with your product's steps. Use `runCue` so narration starts only once the matching screen is on-screen:
-
-```js
-async function runProductWorkflow(page, timings, cursor) {
-  await page.goto(process.env.DEMO_URL);
-
-  await runCue(page, timings, 'cue_01', {scene: {role: 'heading', name: /Dashboard/}});
-
-  await cursor.click(page.getByRole('tab', {name: 'Analytics'}));
-  await runCue(page, timings, 'cue_02', {scene: {role: 'tab', name: 'Analytics'}});
-}
-```
-
-Two rules that matter:
-
-- **`runCue` order must match `cues.json` order.** The muxer lines up the audio with the recording by position.
-- **Always give `runCue` a `scene`.** Without it, narration starts over a loading screen.
-
-The template lives in `output/`, so run it from the repo root — it resolves `output/` relative to itself.
-
-### 5. Record
-
-Start your app, then:
-
-```bash
-export DEMO_URL="http://localhost:3000"
-node output/run_demo.js
-```
-
-A browser window opens and drives itself. You should end up with `output/recordings/*.webm` and `output/sync_manifest.json`, which records when each cue actually started and ended.
-
-Set `DEMO_HEADLESS=1` to record without a visible window.
-
-### 6. Mux and check
-
-```bash
-bash scripts/mux.sh output/audio output/recordings output/final_demo.mp4
-```
-
-Then confirm you got a real video — you want H.264 video, AAC audio, and 1920x1080:
-
-```bash
-ffprobe -v error -show_entries format=duration:stream=codec_name,width,height \
-  -of default=noprint_wrappers=1 output/final_demo.mp4
-```
-
-`output/final_demo.mp4` is your demo. If the duration looks wrong, see [Troubleshooting](#troubleshooting).
-
-## Optional: install as a Claude Code skill
-
-If you use Claude Code, install the repo as a personal skill and it will drive this whole pipeline for you:
+Then install the skill:
 
 ```bash
 mkdir -p ~/.claude/skills
@@ -169,82 +44,152 @@ bash ~/.claude/skills/record-demo/scripts/setup_env.sh
 (cd ~/.claude/skills/record-demo && npx playwright install chromium)
 ```
 
-Start Claude Code inside your *target app's* repo and run `/record-demo`. `SKILL.md` is the entry point. To update later:
+That creates a Python environment, installs the model dependencies, and downloads Chromium. It takes a few minutes and needs about **3 GB of disk** for the TTS model.
+
+**Prerequisites:** Python 3.11 or 3.12 (not 3.13+, where the PyTorch wheels aren't published), Node.js 20+, and FFmpeg. On Apple Silicon the pipeline runs on MLX and is fast; elsewhere it uses PyTorch and falls back to CPU, which is slow.
+
+To update an existing install:
 
 ```bash
 (cd ~/.claude/skills/record-demo && git pull)
 ```
 
+Restart Claude Code after updating so it reloads the skill.
+
+## Voice sample
+
+Record yourself speaking normally for 5–12 seconds — no music, no background noise — and save it as `assets/reference_voice.wav` in the skill directory. Convert it if you recorded something else:
+
+```bash
+ffmpeg -i ~/Desktop/my_voice.m4a -t 8 -ar 16000 -ac 1 ~/.claude/skills/record-demo/assets/reference_voice.wav
+```
+
+This file is ignored by Git. It is your voice, and it should not end up in a repo.
+
+On Apple Silicon that's the last setup step. On Windows and Linux, also write down the **exact words** you said in the clip — the PyTorch backend needs them verbatim.
+
+## What the agent does
+
+The pipeline behind a single request. You can read this to know what the agent is up to, or to sanity-check a result.
+
+| Step | What happens |
+| --- | --- |
+| 1. Draft cues | Reads the running app, picks the scenes worth showing, and writes one narration sentence per scene. |
+| 2. Synthesize | Generates each sentence in your cloned voice. Happens *before* recording, so the recorder knows how long each clip runs. |
+| 3. Write the workflow | Copies the recorder template and fills in your app's real navigation and selectors, pairing every cue with the scene it should wait for. |
+| 4. Record | Drives a real Chromium window, with a visible cursor and click effects, and records when each cue actually started and ended. |
+| 5. Sync | Lines the narration up with what was recorded, inserting silence over browser transitions so a sentence never starts over a loading screen. |
+| 6. Mux and verify | Produces a 1920x1080 H.264/AAC MP4 and checks it is real. |
+
+The round trip in steps 2 and 4 is what makes the sync work: audio is generated first, then the recording reports back when each line actually played.
+
+## Driving it by hand
+
+Rarely needed. If you want to run a single stage yourself, or you are debugging a bad result:
+
+```bash
+SKILL=~/.claude/skills/record-demo
+APP=/path/to/your/app
+
+# 1. your narration, one sentence per scene, in the app repo
+mkdir -p "$APP/output" && echo '[
+  { "id": "cue_01", "text": "Welcome to the reporting dashboard." },
+  { "id": "cue_02", "text": "Here is the workflow you can automate." }
+]' > "$APP/output/cues.json"
+
+# 2. synthesize. The venv lives in the skill dir; the output goes to the app.
+if [[ "$(uname -s)" == "Darwin" && "$(uname -m)" == "arm64" ]]; then
+  PY="$SKILL/.venv-mlx/bin/python"
+else
+  PY="$SKILL/.venv/bin/python"
+fi
+cd "$APP"
+"$PY" "$SKILL/scripts/voice_clone.py" \
+  --cues output/cues.json \
+  --ref-audio "$SKILL/assets/reference_voice.wav"
+
+# 3. record. Needs DEMO_URL and a customized output/run_demo.js.
+DEMO_URL="http://localhost:3000" node output/run_demo.js
+
+# 4. mux and verify
+bash "$SKILL/scripts/mux.sh" output/audio output/recordings output/final_demo.mp4
+ffprobe -v error -show_entries format=duration:stream=codec_name,width,height \
+  -of default=noprint_wrappers=1 output/final_demo.mp4
+```
+
+The recorder must live at `output/run_demo.js` in the app repo and be run from that
+repo's root — it resolves `output/` relative to itself.
+
 ## Environment variables
 
-| Variable | Default | Used by | What it does |
-| --- | --- | --- | --- |
-| `DEMO_URL` | — (required) | recorder | The app to record. |
-| `DEMO_HEADLESS` | `0` | recorder | Set to `1` to hide the browser window. |
-| `DEMO_VIEWPORT_WIDTH` | `2000` | recorder | Page width. Override for very wide layouts. |
-| `DEMO_VIEWPORT_HEIGHT` | `1125` | recorder | Page height. |
-| `DEMO_ACTIONS` | — | recorder | JSON array of clicks (`{selector, cue, waitForBefore, waitForAfter}`) if you'd rather not edit the template. |
-| `DEMO_INITIAL_SCENE` | — | recorder | JSON scene descriptor used when `DEMO_ACTIONS` is empty. |
-| `SYNC_MANIFEST` | `output/sync_manifest.json` | muxer | Override the sync manifest path. |
+Set these in the target app's environment before asking for a demo. The agent handles them unless you need something unusual.
 
-The page is recorded at 2000x1125 so wide layouts don't clip at the right edge, then scaled down to 1920x1080 in the final file.
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `DEMO_URL` | — (required) | The app to record. |
+| `DEMO_HEADLESS` | `0` | Set to `1` to hide the browser window. |
+| `DEMO_VIEWPORT_WIDTH` | `2000` | Page width. Override for very wide layouts. |
+| `DEMO_VIEWPORT_HEIGHT` | `1125` | Page height. |
+| `DEMO_ACTIONS` | — | JSON clicks (`{selector, cue, waitForBefore, waitForAfter}`) if you'd rather not let the agent edit the template. |
+| `SYNC_MANIFEST` | `output/sync_manifest.json` | Override the sync manifest path. |
+
+The page is recorded at 2000x1125 so wide layouts don't clip at the right edge, then scaled to 1920x1080 in the final file.
 
 ## How it fits together
 
 ```mermaid
 flowchart LR
-    Author[Demo author] --> Cues[Cues JSON]
-    Author --> Reference[Reference voice WAV\n5-12 seconds]
-    Target[Target web app] --> Playwright[Playwright\nChromium recorder]
-    Cues --> TTS[Qwen3-TTS\nPython voice synthesis]
-    Reference --> TTS
+    Request[Plain-language request] --> Cues[Cues JSON]
+    Voice[Reference voice WAV\n5-12 seconds] --> TTS[Qwen3-TTS\nPython voice synthesis]
+    Cues --> TTS
     TTS --> Audio[Narration WAV files]
     TTS --> Manifest[Timing manifest JSON]
-    Manifest --> Playwright
+    Manifest --> Playwright[Playwright\nChromium recorder]
+    Target[Target web app] --> Playwright
     Playwright --> Sync[Sync manifest\nmeasured cue intervals]
-    Sync --> Mux
     Playwright --> Recording[Screen recording\nWebM]
     Audio --> Mux[FFmpeg muxer]
+    Sync --> Mux
     Recording --> Mux
     Mux --> Video[Final demo\nH.264/AAC MP4]
     Video --> Verify[FFprobe verification]
 ```
 
-The interesting part is the round trip. Narration is generated *before* recording, so the recorder knows how long each clip should be. The recorder then writes down when each clip actually played, and the muxer uses that to insert silence over browser transitions — otherwise your next sentence starts while the next screen is still loading.
+## Troubleshooting
+
+**A demo came out with narration over the wrong screens** — cue order didn't match the visual order. Ask the agent to re-check the pairing, or edit `output/run_demo.js` so each `runCue` waits on the scene it narrates.
+
+**The final video is shorter than you expected** — the muxer caps the output at the narration length, and stops early if the recording runs out first. A small trailing cut is normal; a large one means a cue is missing. Compare:
+
+```bash
+ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1 output/audio/master_narration.wav
+ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1 output/final_demo.mp4
+```
+
+**`externally-managed-environment`** — something installed into system Python. Use `scripts/setup_env.sh`; it makes its own venv.
+
+**Torch import errors, or `backcompat`** — the Python is too new. Install 3.12, delete the venv, and rerun `scripts/setup_env.sh`.
+
+**Narration takes forever** — running on the CPU PyTorch path. On a Mac, make sure the agent is using the `.venv-mlx` environment, not `.venv`.
+
+**Voice sounds wrong or the transcript is rejected** — the PyTorch backend needs the reference transcript to match the sample word for word. The MLX path ignores the transcript entirely and is more forgiving.
+
+**`No recordings found`** — the recorder didn't finish, or the mux ran from the wrong directory. Check that `output/recordings/*.webm` exists.
+
+**Model download fails** — check free disk space, clear an old `~/.cache/huggingface`, retry.
 
 ## Project layout
 
 | Path | Purpose |
 | --- | --- |
+| `SKILL.md` | The skill definition the agent reads. The source of truth. |
+| `.claude/skills/record-demo.md` | Entry point for when you work inside this repo. Points at `SKILL.md`. |
 | `scripts/setup_env.sh` | Creates the Python environment and installs Node dependencies |
 | `scripts/voice_clone.py` | Generates narration audio and timing manifests with Qwen3-TTS |
 | `scripts/run_demo_template.js` | Recorder template with synthetic cursor, click effects, and cue timing |
 | `scripts/mux.sh` | Aligns narration with the recording and muxes the final MP4 |
 | `output/` | Everything generated. Ignored by Git. |
 | `assets/reference_voice.wav` | Your voice sample. Ignored by Git. |
-
-## Troubleshooting
-
-**`externally-managed-environment`** — you installed into system Python. Use `scripts/setup_env.sh`; it makes its own venv.
-
-**`ref_text is required`** — you used the PyTorch backend without `--ref-transcript`, or you passed the wrong words. The transcript must match the sample exactly.
-
-**Torch import errors / `backcompat`** — your Python is too new. Install 3.12 and rerun `scripts/setup_env.sh` after deleting the venv.
-
-**Narration takes forever** — you're on the CPU PyTorch path. On a Mac, make sure the MLX venv is the one you picked in step 3.
-
-**`No recordings found`** — the recorder didn't finish, or you muxed from the wrong directory. Check that `output/recordings/*.webm` exists.
-
-**Final video is shorter than you expected** — the muxer caps the output at the narration length, and stops early if the recording runs out first. A small trailing cut is normal. A large mismatch means a cue is missing from `cues.json`, or `runCue` order doesn't match it. Compare the two:
-
-```bash
-ffprobe -v error -show_entries format=duration \
-  -of default=noprint_wrappers=1 output/audio/master_narration.wav
-ffprobe -v error -show_entries format=duration \
-  -of default=noprint_wrappers=1 output/final_demo.mp4
-```
-
-**Model download fails** — check free disk space, clear an old `~/.cache/huggingface`, retry.
 
 ## Development checks
 
@@ -257,9 +202,9 @@ npm test
 
 These validate the recorder template's syntax only. There is no end-to-end test target in the repo.
 
-## Before you publish anything
+## Before you share this
 
 - Keep `assets/*.wav` local. Never commit a personal voice reference.
 - Keep `.env`, credentials, authenticated URLs, and target-specific secrets out of the repo.
 - Keep `output/` ignored — it contains recordings, selectors, and application data.
-- No license is included. Add one before you distribute this outside your team.
+- No license is included. Add one before distributing this outside your team.
